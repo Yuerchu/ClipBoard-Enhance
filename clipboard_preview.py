@@ -1,13 +1,11 @@
-import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QLabel, QMainWindow, QVBoxLayout, 
                             QWidget, QDesktopWidget, QScrollArea, QPushButton,
                             QHBoxLayout, QSizePolicy, QFrame)
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QObject, QSize, QEvent
-from PyQt5.QtGui import QFont, QPixmap, QImage, QIcon, QPalette, QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QFontDatabase, QWheelEvent
+from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QObject, QEvent
+from PyQt5.QtGui import QPixmap, QFontDatabase
 import win32api
 import keyboard
-import win32con
 import threading
 import re
 
@@ -76,10 +74,11 @@ class CodeDetector:
 class StyleSheet:
     """应用程序的样式定义"""
     
-    # 加载自定义字体
-    FONT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "MapleMono-NF-CN-Regular.ttf")
+    # 加载自定义字体 - 修复路径计算问题
+    FONT_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "MapleMono-NF-CN-Regular.ttf"))
     FONT_LOADED = False
     FONT_NAME = "Maple Mono NF CN"
+    FONT_FAMILY = "Maple Mono NF CN"  # 默认设置字体名称
     
     @classmethod
     def load_custom_font(cls):
@@ -88,13 +87,42 @@ class StyleSheet:
             return True
             
         try:
-            if os.path.exists(cls.FONT_PATH):
-                font_id = QFontDatabase.addApplicationFont(cls.FONT_PATH)
-                if font_id != -1:
+            print(f"尝试加载字体文件: {cls.FONT_PATH}")
+            
+            if not os.path.exists(cls.FONT_PATH):
+                # 尝试备用路径
+                backup_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../static/MapleMono-NF-CN-Regular.ttf"))
+                print(f"主路径不存在，尝试备用路径: {backup_path}")
+                
+                if os.path.exists(backup_path):
+                    cls.FONT_PATH = backup_path
+                else:
+                    print("备用路径也不存在，无法找到字体文件")
+                    return False
+            
+            font_id = QFontDatabase.addApplicationFont(cls.FONT_PATH)
+            if font_id != -1:
+                font_families = QFontDatabase.applicationFontFamilies(font_id)
+                if font_families:
                     cls.FONT_LOADED = True
-                    cls.FONT_FAMILY = QFontDatabase.applicationFontFamilies(font_id)[0]
-                    print(f"已加载自定义字体: {cls.FONT_FAMILY}")
+                    cls.FONT_FAMILY = font_families[0]
+                    print(f"成功加载字体: {cls.FONT_FAMILY}")
+                    
+                    # 显示所有可用字体，帮助调试
+                    all_fonts = QFontDatabase().families()
+                    print(f"系统中的所有字体: {[f for f in all_fonts if 'Maple' in f]}")
+                    
                     return True
+                else:
+                    print("无法获取字体族名")
+            else:
+                print("添加字体失败，返回ID为-1")
+                
+            # 即使获取字体族失败，也尝试使用已知的字体名称
+            cls.FONT_LOADED = True
+            print(f"使用预设字体名称: {cls.FONT_NAME}")
+            return True
+                
         except Exception as e:
             print(f"加载字体失败: {e}")
         
@@ -170,18 +198,16 @@ class StyleSheet:
             background-color: rgba(0, 0, 0, 20);
         """
         
-        if cls.FONT_LOADED:
-            return base_style + f"""
-                pre, code, .highlight {{
-                    font-family: '{cls.FONT_FAMILY}', 'Consolas', 'Courier New', monospace;
-                }}
-            """
-        else:
-            return base_style + """
-                pre, code, .highlight {
-                    font-family: 'Consolas', 'Courier New', monospace;
-                }
-            """
+        # 无论字体加载是否成功，都尝试应用字体名称，并添加连字支持
+        return base_style + f"""
+            pre, code, .highlight {{
+                font-family: '{cls.FONT_NAME}', '{cls.FONT_FAMILY}', 'Consolas', 'Courier New', monospace;
+                font-size: 16px;
+                font-feature-settings: "calt" 1, "liga" 1, "cv01" 1, "zero" 1, "cv99" 1, "ss01" 1, "ss02" 1, "ss07" 1;
+                -webkit-font-feature-settings: "calt" 1, "liga" 1, "cv01" 1, "zero" 1, "cv99" 1, "ss01" 1, "ss02" 1, "ss07" 1;
+                -moz-font-feature-settings: "calt" 1, "liga" 1, "cv01" 1, "zero" 1, "cv99" 1, "ss01" 1, "ss02" 1, "ss07" 1;
+            }}
+        """
     
     # 滚动区域样式
     SCROLL_AREA = """
@@ -510,9 +536,9 @@ class ContentWidget(QFrame):
     def format_code(self, code):
         """格式化代码，添加语法高亮"""
         if not PYGMENTS_AVAILABLE:
-            # 使用自定义字体的pre标签
+            # 使用自定义字体的pre标签，添加智能连字支持
             if StyleSheet.FONT_LOADED:
-                return f'<pre style="font-family: \'{StyleSheet.FONT_FAMILY}\', Consolas, monospace;">{code}</pre>'
+                return f'<pre style="font-family: \'{StyleSheet.FONT_FAMILY}\', Consolas, monospace; font-feature-settings: \'calt\' 1, \'liga\' 1, \'cv01\' 1, \'zero\' 1, \'cv99\' 1, \'ss01\' 1, \'ss02\' 1, \'ss07\' 1;">{code}</pre>'
             else:
                 return f"<pre>{code}</pre>"
             
@@ -523,15 +549,22 @@ class ContentWidget(QFrame):
             highlighted_code = highlight(code, lexer, formatter)
             css = formatter.get_style_defs('.highlight')
             
-            # 添加自定义字体到CSS
+            # 添加自定义字体到CSS，包含智能连字支持
             if StyleSheet.FONT_LOADED:
-                css += f"\n.highlight pre {{ font-family: '{StyleSheet.FONT_FAMILY}', Consolas, monospace; }}"
+                css += f"""
+                .highlight pre {{
+                    font-family: '{StyleSheet.FONT_FAMILY}', Consolas, monospace;
+                    font-feature-settings: "calt" 1, "liga" 1, "cv01" 1, "zero" 1, "cv99" 1, "ss01" 1, "ss02" 1, "ss07" 1;
+                    -webkit-font-feature-settings: "calt" 1, "liga" 1, "cv01" 1, "zero" 1, "cv99" 1, "ss01" 1, "ss02" 1, "ss07" 1;
+                    -moz-font-feature-settings: "calt" 1, "liga" 1, "cv01" 1, "zero" 1, "cv99" 1, "ss01" 1, "ss02" 1, "ss07" 1;
+                }}
+                """
             
             return f"<style>{css}</style>{highlighted_code}"
         except:
-            # 使用自定义字体的pre标签
+            # 使用自定义字体的pre标签，添加智能连字支持
             if StyleSheet.FONT_LOADED:
-                return f'<pre style="font-family: \'{StyleSheet.FONT_FAMILY}\', Consolas, monospace;">{code}</pre>'
+                return f'<pre style="font-family: \'{StyleSheet.FONT_FAMILY}\', Consolas, monospace; font-feature-settings: \'calt\' 1, \'liga\' 1, \'cv01\' 1, \'zero\' 1, \'cv99\' 1, \'ss01\' 1, \'ss02\' 1, \'ss07\' 1;">{code}</pre>'
             else:
                 return f"<pre>{code}</pre>"
     
