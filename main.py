@@ -12,8 +12,6 @@ import json
 import os
 import re
 import webbrowser
-from datetime import datetime
-import subprocess
 import clipboard_preview
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
@@ -278,8 +276,12 @@ def open_netdisk_with_pwd_and_copy(netdisk_info):
         toast('打开网盘链接出错', str(e))
         print(f"打开网盘链接出错: {e}")
 
-def get_clipboard_content():
-    """获取剪贴板内容及其类型"""
+def get_clipboard_content(truncate=True):
+    """获取剪贴板内容及其类型
+    
+    Args:
+        truncate: 是否截断长文本，默认为True
+    """
     try:
         win32clipboard.OpenClipboard()
         
@@ -295,21 +297,30 @@ def get_clipboard_content():
                 return {
                     "type": "网盘链接", 
                     "content": f"{netdisk_info['name']}: {netdisk_info['url']}{pwd_info}",
-                    "netdisk_info": netdisk_info
+                    "netdisk_info": netdisk_info,
+                    "raw_content": data  # 保存原始内容
                 }
             
             # 检查文本是否是URL
             if is_url(data):
                 win32clipboard.CloseClipboard()
-                return {"type": "网址", "content": data if len(data) <= config["truncate_length"] else data[:config["truncate_length"]] + "..."}
+                return {
+                    "type": "网址", 
+                    "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
+                    "raw_content": data  # 保存原始内容
+                }
             
             # 检查文本是否是邮箱
             if is_email(data):
                 win32clipboard.CloseClipboard()
-                return {"type": "邮箱", "content": data}
+                return {"type": "邮箱", "content": data, "raw_content": data}
                 
             win32clipboard.CloseClipboard()
-            return {"type": "文本", "content": data if len(data) <= config["truncate_length"] else data[:config["truncate_length"]] + "..."}
+            return {
+                "type": "文本", 
+                "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
+                "raw_content": data  # 保存原始内容
+            }
         
         # 检查是否有HTML内容
         elif win32clipboard.IsClipboardFormatAvailable(CF_HTML):
@@ -320,11 +331,15 @@ def get_clipboard_content():
                 import re
                 text = re.sub('<[^<]+?>', '', data)
                 text = ' '.join(text.split())
-                summary = text[:config["truncate_length"]] + "..." if len(text) > config["truncate_length"] else text
-                return {"type": "HTML", "content": summary}
+                summary = text[:config["truncate_length"]] + "..." if truncate and len(text) > config["truncate_length"] else text
+                return {
+                    "type": "HTML", 
+                    "content": summary, 
+                    "raw_content": data  # 保存原始HTML
+                }
             except:
                 win32clipboard.CloseClipboard()
-                return {"type": "HTML", "content": "HTML内容 (无法显示详细信息)"}
+                return {"type": "HTML", "content": "HTML内容 (无法显示详细信息)", "raw_content": ""}
         
         # 检查是否有RTF格式
         elif win32clipboard.IsClipboardFormatAvailable(CF_RTF):
@@ -334,20 +349,20 @@ def get_clipboard_content():
                 preview = "富文本内容"
                 if len(data) > 50:
                     preview += f" (大小: {len(data)} 字节)"
-                return {"type": "富文本", "content": preview}
+                return {"type": "富文本", "content": preview, "raw_content": data}
             except:
                 win32clipboard.CloseClipboard()
-                return {"type": "富文本", "content": "富文本内容 (无法显示详细信息)"}
+                return {"type": "富文本", "content": "富文本内容 (无法显示详细信息)", "raw_content": ""}
         
         # 检查是否有URL
         elif win32clipboard.IsClipboardFormatAvailable(CF_URL):
             try:
                 url = win32clipboard.GetClipboardData(CF_URL)
                 win32clipboard.CloseClipboard()
-                return {"type": "网址", "content": url}
+                return {"type": "网址", "content": url, "raw_content": url}
             except:
                 win32clipboard.CloseClipboard()
-                return {"type": "网址", "content": "网址内容 (无法显示)"}
+                return {"type": "网址", "content": "网址内容 (无法显示)", "raw_content": ""}
                 
         # 检查是否有图片
         elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB) or win32clipboard.IsClipboardFormatAvailable(win32con.CF_BITMAP):
@@ -360,12 +375,12 @@ def get_clipboard_content():
                         import struct
                         width, height = struct.unpack('ii', dib_data[8:16])
                         win32clipboard.CloseClipboard()
-                        return {"type": "图片", "content": f"已复制一张图片 (尺寸: {width}x{height})"}
+                        return {"type": "图片", "content": f"已复制一张图片 (尺寸: {width}x{height})", "raw_content": dib_data}
             except:
                 pass
                 
             win32clipboard.CloseClipboard()
-            return {"type": "图片", "content": "已复制一张图片"}
+            return {"type": "图片", "content": "已复制一张图片", "raw_content": ""}
             
         # 检查是否有文件列表
         elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
@@ -386,14 +401,14 @@ def get_clipboard_content():
                 else:
                     size_str = f"{file_size/(1024*1024):.1f} MB"
                     
-                return {"type": "文件", "content": f"已复制文件: {file_name} ({size_str})"}
+                return {"type": "文件", "content": f"已复制文件: {file_name} ({size_str})", "raw_content": file_path}
             else:
-                return {"type": "文件", "content": f"已复制 {file_count} 个文件"}
+                return {"type": "文件", "content": f"已复制 {file_count} 个文件", "raw_content": file_list}
         
         # 检查是否是Office绘图对象
         elif win32clipboard.IsClipboardFormatAvailable(CF_OFFICE_DRAWING):
             win32clipboard.CloseClipboard()
-            return {"type": "Office对象", "content": "已复制Office绘图或对象"}
+            return {"type": "Office对象", "content": "已复制Office绘图或对象", "raw_content": ""}
             
         # 其他格式
         else:
@@ -418,15 +433,15 @@ def get_clipboard_content():
             win32clipboard.CloseClipboard()
             
             if formats:
-                return {"type": "特殊格式", "content": f"已复制内容 (格式: {', '.join(formats[:3])}...)"}
+                return {"type": "特殊格式", "content": f"已复制内容 (格式: {', '.join(formats[:3])}...)", "raw_content": formats}
             else:
-                return {"type": "未知格式", "content": "已复制内容 (未知格式)"}
+                return {"type": "未知格式", "content": "已复制内容 (未知格式)", "raw_content": ""}
     except Exception as e:
         try:
             win32clipboard.CloseClipboard()
         except:
             pass
-        return {"type": "错误", "content": str(e)}
+        return {"type": "错误", "content": str(e), "raw_content": str(e)}
 
 # 创建系统托盘图标
 def create_image():
@@ -491,7 +506,7 @@ def monitor_clipboard():
     global previous_content
     
     # 初始化剪贴板监视
-    previous_content = get_clipboard_content()
+    previous_content = get_clipboard_content(truncate=True)
     
     # 持续监视剪贴板
     print("开始监视剪贴板...")
@@ -502,7 +517,7 @@ def monitor_clipboard():
                 time.sleep(config["check_interval"])
                 continue
                 
-            current_content = get_clipboard_content()
+            current_content = get_clipboard_content(truncate=True)  # 通知显示使用截断内容
             if current_content != previous_content:
                 previous_content = current_content
                 
@@ -597,7 +612,8 @@ if __name__ == "__main__":
     monitor_thread.start()
     
     # 初始化剪贴板预览控制器（在主线程中）
-    preview_controller = clipboard_preview.ClipboardPreviewController(get_clipboard_content)
+    # 修改：传递获取完整剪贴板内容的函数
+    preview_controller = clipboard_preview.ClipboardPreviewController(lambda: get_clipboard_content(truncate=False))
     preview_controller.setup(app)
     
     # 显示系统托盘图标
