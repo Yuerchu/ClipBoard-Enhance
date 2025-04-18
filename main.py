@@ -14,6 +14,9 @@ import re
 import webbrowser
 from datetime import datetime
 import subprocess
+import clipboard_preview
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QTimer
 
 # 检查操作系统类型
 if platform.system() != "Windows":
@@ -586,10 +589,28 @@ if __name__ == "__main__":
     # 加载配置
     load_config()
     
+    # 初始化QApplication
+    app = QApplication([]) if not QApplication.instance() else QApplication.instance()
+    
     # 启动剪贴板监视线程
     monitor_thread = threading.Thread(target=monitor_clipboard, daemon=True)
     monitor_thread.start()
     
+    # 初始化剪贴板预览控制器（在主线程中）
+    preview_controller = clipboard_preview.ClipboardPreviewController(get_clipboard_content)
+    preview_controller.setup(app)
+    
     # 显示系统托盘图标
     icon = setup_tray_icon()
-    icon.run()
+    
+    # 使用QTimer定期处理事件，而不是在pystray的回调中这样做
+    qt_timer = QTimer()
+    qt_timer.timeout.connect(app.processEvents)
+    qt_timer.start(100)
+    
+    # 以非阻塞方式启动pystray
+    icon_thread = threading.Thread(target=icon.run, daemon=True)
+    icon_thread.start()
+    
+    # 启动Qt事件循环（主循环）
+    sys.exit(app.exec_())
