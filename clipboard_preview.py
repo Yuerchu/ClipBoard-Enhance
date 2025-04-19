@@ -7,6 +7,7 @@ from PyQt5.QtGui import QPixmap, QFontDatabase
 import win32api
 import keyboard
 import threading
+import log
 import re
 
 # 尝试导入语法高亮库
@@ -87,17 +88,17 @@ class StyleSheet:
             return True
             
         try:
-            print(f"尝试加载字体文件: {cls.FONT_PATH}")
+            log.debug(f"尝试加载字体文件: {cls.FONT_PATH}")
             
             if not os.path.exists(cls.FONT_PATH):
                 # 尝试备用路径
                 backup_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../static/MapleMono-NF-CN-Regular.ttf"))
-                print(f"主路径不存在，尝试备用路径: {backup_path}")
+                log.debug(f"主路径不存在，尝试备用路径: {backup_path}")
                 
                 if os.path.exists(backup_path):
                     cls.FONT_PATH = backup_path
                 else:
-                    print("备用路径也不存在，无法找到字体文件")
+                    log.debug("备用路径也不存在，无法找到字体文件")
                     return False
             
             font_id = QFontDatabase.addApplicationFont(cls.FONT_PATH)
@@ -106,25 +107,25 @@ class StyleSheet:
                 if font_families:
                     cls.FONT_LOADED = True
                     cls.FONT_FAMILY = font_families[0]
-                    print(f"成功加载字体: {cls.FONT_FAMILY}")
+                    log.debug(f"成功加载字体: {cls.FONT_FAMILY}")
                     
                     # 显示所有可用字体，帮助调试
                     all_fonts = QFontDatabase().families()
-                    print(f"系统中的所有字体: {[f for f in all_fonts if 'Maple' in f]}")
+                    log.debug(f"系统中的所有字体: {[f for f in all_fonts if 'Maple' in f]}")
                     
                     return True
                 else:
-                    print("无法获取字体族名")
+                    log.debug("无法获取字体族名")
             else:
-                print("添加字体失败，返回ID为-1")
+                log.debug("添加字体失败，返回ID为-1")
                 
             # 即使获取字体族失败，也尝试使用已知的字体名称
             cls.FONT_LOADED = True
-            print(f"使用预设字体名称: {cls.FONT_NAME}")
+            log.debug(f"使用预设字体名称: {cls.FONT_NAME}")
             return True
                 
         except Exception as e:
-            print(f"加载字体失败: {e}")
+            log.error(f"加载字体失败: {e}")
         
         return False
     
@@ -776,7 +777,7 @@ class ClipboardPreviewController(QObject):
             # 使用keyboard库监听Ctrl键，更简单可靠
             keyboard.on_press_key("ctrl", self.kb_on_ctrl_pressed)
             keyboard.on_release_key("ctrl", self.kb_on_ctrl_released)
-            print("使用keyboard库监听Ctrl键")
+            log.debug("使用keyboard库监听Ctrl键")
             
             # 以下代码保留但不再使用，因为win32gui的热键监听在多线程环境中可能不稳定
             """
@@ -808,15 +809,15 @@ class ClipboardPreviewController(QObject):
                 win32gui.UnregisterHotKey(None, ctrl_up_id)
             """
         except Exception as e:
-            print(f"键盘监听错误: {e}")
+            log.error(f"键盘监听错误: {e}")
             
             # 确保即使出错也能启用键盘监听
             try:
                 keyboard.on_press_key("ctrl", self.kb_on_ctrl_pressed)
                 keyboard.on_release_key("ctrl", self.kb_on_ctrl_released)
-                print("降级到keyboard库监听")
+                log.debug("降级到keyboard库监听")
             except Exception as e2:
-                print(f"键盘监听完全失败: {e2}")
+                log.error(f"键盘监听完全失败: {e2}")
     
     def on_ctrl_pressed(self):
         """Ctrl键被按下时的处理函数"""
@@ -854,9 +855,9 @@ class ClipboardPreviewController(QObject):
                     self.signals.update_preview.emit(content)
                     self.signals.show_preview.emit()
                 else:
-                    print(f"意外的剪贴板内容格式: {type(content)}")
+                    log.warning(f"意外的剪贴板内容格式: {type(content)}")
             except Exception as e:
-                print(f"预览准备错误: {e}")
+                log.error(f"预览准备错误: {e}")
     
     def update_preview_window(self, content):
         """更新预览窗口内容（在主线程中执行）"""

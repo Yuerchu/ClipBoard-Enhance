@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+# 测试模式：程序将展示终端内容，并且强制启用 Debug 等级日志
 
 add_files = [
     ('static\\MapleMono-NF-CN-Regular.ttf', 'static'),
@@ -26,10 +27,10 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='ClipBoard Enhance',
+    name='clipboard',
     icon='static/favicon.ico',
     debug=True,
-    bootloader_ignore_signals=False,
+    bootloader_ignore_signals=True,
     strip=True,
     upx=True,
     upx_exclude=[],

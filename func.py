@@ -1,5 +1,4 @@
-import platform
-import sys
+import sys, ctypes
 import time
 import pyperclip
 import win32clipboard
@@ -12,23 +11,18 @@ import os
 import re
 import webbrowser
 from PyQt5.QtWidgets import QMessageBox
-import argparse
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, urlunparse, parse_qs
 import winreg
 import subprocess
 from netdisk_rules import NETDISK_RULES
 import log
-
-# 检查操作系统类型
-if platform.system() != "Windows":
-    log.error("这个程序仅适用于Windows系统。")
-    sys.exit(1)
+from pystray._base import Icon
+from PyQt5.QtWidgets import QApplication
 
 def clean_text_for_netdisk_detection(text):
     """
     清理文本，去除可能的干扰字符，为网盘链接检测做准备
     """
-    log.debug(f'准备清洗文本：{text}')
     # 1. 移除所有emoji字符
     emoji_pattern = re.compile(
         "["
@@ -52,7 +46,6 @@ def clean_text_for_netdisk_detection(text):
     # 3. 尝试移除一些常见的干扰符号（保留URL中可能出现的基本符号）
     text = re.sub(r'[@#$%^&*()_+=<>{}\[\]|\\\'",]', '', text)
     
-    log.debug(f'清洗结果:{text}')
     return text
 
 # 全局变量
@@ -681,85 +674,94 @@ def handle_notification_action(args, pwd=None):
     return False
 
 # ==== 网盘协议处理功能（从netdisk.py集成） ====
-def handle_netdisk_protocol():
+def handle_netdisk_protocol(
+    url: str = None,
+    pwd: str = None,
+    register: bool = False
+):
     """处理netdisk://协议请求（命令行处理入口点）"""
-    parser = argparse.ArgumentParser(description='处理网盘链接')
-    parser.add_argument('--url', help='网盘链接')
-    parser.add_argument('--pwd', help='提取码')
-    parser.add_argument('--register', action='store_true', help='注册netdisk://协议')
     
-    # 如果没有参数并且是拖放执行，提示使用方法
-    if len(sys.argv) == 1:
-        print("使用方法: main.py --url <网盘链接> [--pwd <提取码>]")
-        print("或使用: main.py --register 来注册netdisk://协议")
-        return
-    
-    args = parser.parse_args()
+    log.debug(f"处理协议请求: url={url}, pwd={pwd}, register={register}")
     
     # 处理注册协议请求
-    if args.register:
-        register_netdisk_protocol()
-        return
+    if register:
+        request_admin_and_register()
+        exit_application(code=1)
         
     # 没有URL参数，退出
-    if not args.url:
-        print("缺少必要的URL参数")
-        return
+    if not url:
+        log.error("缺少必要的URL参数")
+        exit_application(code=1)
+    
+    # 去除可能存在的引号
+    url = url.strip('"')
     
     # 处理URL，移除netdisk://前缀并确保协议格式正确
-    url = args.url
     if url.startswith("netdisk://"):
         url = url[len("netdisk://"):]
         
-        # 确保URL包含正确的协议格式
-        if not (url.startswith("http://") or url.startswith("https://")):
-            # 修复缺少冒号的情况，如"https//"变为"https://"
-            if url.startswith("http//"):
-                url = "http://" + url[6:]
-            elif url.startswith("https//"):
-                url = "https://" + url[7:]
-            # 默认添加https://前缀
-            elif not url.startswith("://"):
-                url = "https://" + url
+    # 确保URL包含正确的协议格式
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = "https://" + url
     
-    # 从URL中提取提取码
-    pwd = args.pwd
-    parsed_url = urlparse(url)
-    query_params = parse_qs(parsed_url.query)
+    # 修复重复的查询参数问题
+    # 如果URL包含多个问号，只保留第一个问号
+    question_mark_pos = url.find('?')
+    if question_mark_pos > 0 and url.find('?', question_mark_pos + 1) > 0:
+        url = url[:question_mark_pos] + '?' + url[question_mark_pos + 1:].replace('?', '&')
+        log.debug(f"修复后的URL: {url}")
     
-    # 如果URL中包含pwd参数，则使用URL中的提取码
-    if 'pwd' in query_params and not pwd:
-        pwd = query_params['pwd'][0]
-        # 移除URL中的pwd参数，避免重复
-        clean_query = "&".join([f"{k}={v[0]}" for k, v in query_params.items() if k != 'pwd'])
-        if clean_query:
+    # 从URL中提取提取码 (如果存在)
+    try:
+        parsed_url = urlparse(url)
+        query_params = parse_qs(parsed_url.query)
+        
+        if 'pwd' in query_params and not pwd:
+            # 获取提取码，并确保不包含额外的pwd参数
+            extracted_pwd = query_params['pwd'][0]
+            
+            # 清理提取码中可能的额外pwd参数
+            if '?pwd=' in extracted_pwd or '&pwd=' in extracted_pwd:
+                extracted_pwd = extracted_pwd.split('?pwd=')[0].split('&pwd=')[0]
+                log.debug(f"清理后的提取码: {extracted_pwd}")
+            
+            pwd = extracted_pwd
+            log.debug(f"从URL中提取到提取码: {pwd}")
+            
+            # 从URL中移除pwd参数
+            clean_params = {k: v[0] for k, v in query_params.items() if k != 'pwd'}
+            clean_query = "&".join([f"{k}={v}" for k, v in clean_params.items()])
+            
             url_parts = list(parsed_url)
             url_parts[4] = clean_query
-            url = urlparse("").geturl().join(url_parts)
+            url = urlunparse(url_parts)
+    
+    except Exception as e:
+        log.error(f"解析URL时出错: {e}")
+    
+    log.debug(f"最终URL: {url}, 提取码: {pwd}")
     
     # 打开网盘链接
     webbrowser.open(url)
     
-    # 如果有提取码，先复制到剪贴板
+    # 如果有提取码，复制到剪贴板
     if pwd:
         pyperclip.copy(pwd)
         toast('提取码已复制到剪贴板', f'如自动填充失败，可手动粘贴: {pwd}')
     
-    # 使用sys.exit确保程序能够正确退出
-    sys.exit(0)
+    # 使用exit_application确保程序能够正确退出
+    exit_application()
 
 # ==== 协议注册功能（从register_protocol.py集成） ====
 def register_netdisk_protocol():
     """注册 netdisk:// 协议处理器"""
     try:
-        # 获取 Python 解释器路径
-        python_path = sys.executable
+        # 使用当前可执行文件路径，而不是Python解释器
+        executable_path = sys.executable
         
-        # 获取脚本的绝对路径（使用当前脚本路径）
-        script_path = os.path.abspath(__file__)
-        
-        # 创建命令字符串，修改为仅传递URL参数，由netdisk.py解析提取码
-        command = f'"{python_path}" "{script_path}" --url "%1"'
+        # 对于已打包的EXE文件，直接使用可执行文件作为处理程序
+        # 确保传递的参数格式正确
+        command = f'"{executable_path}" -url "%1"'
         
         # 创建注册表项
         with winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, "netdisk") as key:
@@ -771,22 +773,93 @@ def register_netdisk_protocol():
         
         toast("协议注册成功", "现在可以使用 netdisk:// 链接打开网盘")
         return True
+    
     except Exception as e:
         toast("协议注册失败", str(e))
-        print(f"注册协议处理器失败: {e}")
+        log.error(f"注册协议处理器失败: {e}")
         return False
 
 def request_admin_and_register():
     """请求管理员权限并注册协议"""
     # 检查是否已有管理员权限
-    if not os.path.isdir("C:\\Windows\\temp"):
-        # 没有管理员权限，尝试重新以管理员权限启动
-        try:
-            subprocess.run(['powershell', 'Start-Process', 'python', 
-                           f'"{os.path.abspath(__file__)}"', '--register', '-Verb', 'RunAs'], 
-                           shell=True, check=False)
-        except Exception as e:
-            QMessageBox.critical(None, "错误", f"无法获取管理员权限: {e}")
-    else:
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        is_admin = False
+        
+    if is_admin:
         # 已经有管理员权限，直接注册
         register_netdisk_protocol()
+        exit_application()
+    else:
+        toast(
+        "请关闭本应用并以管理员身份启动",
+        "注册协议时遇到问题：权限不足，拒绝访问"
+    )
+
+def main():
+    # 作为主程序运行
+    import pystray
+    import threading
+    import clipboard_preview
+    from PyQt5.QtCore import QTimer
+    
+    # 加载配置
+    load_config()
+    
+    # 初始化QApplication
+    log.debug('初始化QApplication...')
+    app = QApplication([]) if not QApplication.instance() else QApplication.instance()
+    
+    # 启动剪贴板监视线程
+    log.debug('启动剪贴板监视线程...')
+    monitor_thread = threading.Thread(target=monitor_clipboard, daemon=True)
+    monitor_thread.start()
+    
+    # 初始化剪贴板预览控制器（在主线程中）
+    preview_controller = clipboard_preview.ClipboardPreviewController(lambda: get_clipboard_content(truncate=False))
+    preview_controller.setup(app)
+    
+    # 显示系统托盘图标
+    icon = setup_tray_icon()
+    
+    # 修改托盘菜单，添加注册协议选项，并更新退出功能
+    def create_menu():
+        return pystray.Menu(
+            pystray.MenuItem('清空当前剪贴板', lambda: clear_clipboard()),
+            pystray.MenuItem('网盘链接检测', lambda: toggle_netdisk_detection()),
+            pystray.MenuItem('访问网盘时复制提取码', lambda: toggle_copy_pwd()),
+            pystray.MenuItem('注册网盘协议处理器', lambda: request_admin_and_register()),
+            pystray.MenuItem('退出', lambda: exit_application(icon=icon, app=app))
+        )
+    
+    icon.menu = create_menu()
+    
+    # 使用QTimer定期处理事件，而不是在pystray的回调中这样做
+    qt_timer = QTimer()
+    qt_timer.timeout.connect(app.processEvents)
+    qt_timer.start(100)
+    
+    # 以非阻塞方式启动pystray
+    icon_thread = threading.Thread(target=icon.run, daemon=True)
+    icon_thread.start()
+    
+    # 启动Qt事件循环（主循环）
+    sys.exit(app.exec_())        
+
+# 创建完全退出程序的函数
+def exit_application(code: int = 0, icon: Icon = None, app: QApplication = None):
+    # 检查是否提供了icon和app参数
+    if icon is not None:
+        # 停止托盘图标
+        icon.stop()
+    if app is not None:
+        # 退出Qt应用程序
+        app.quit()
+    
+    pid = os.getpid()
+    try:
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
+    except Exception as e:
+        print(f"强制终止失败: {e}")
+        os._exit(1)    # 强制终止
