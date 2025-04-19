@@ -2,3 +2,5 @@ config.json
 temp_netdisk.json
 
 __pycache__/
+build/
+dist/
