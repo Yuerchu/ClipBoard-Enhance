@@ -27,7 +27,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='clipboard',
+    name='clipboard-debug',
     icon='static/favicon.ico',
     debug=True,
     bootloader_ignore_signals=True,

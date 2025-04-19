@@ -65,7 +65,7 @@ git clone https://github.com/Yuerchu/ClipBoard-Enhance.git
 pip install -r requirements.txt
 
 # 首次运行（需管理员权限）
-python main.py --install
+python main.py
 ```
 
 ### 构建
