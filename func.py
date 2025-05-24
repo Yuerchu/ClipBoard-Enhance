@@ -78,8 +78,12 @@ config = {
     "max_history_size": 10,
     "show_notifications": True,
     "truncate_length": 100,
-    "enable_netdisk_detection": True,  # 启用网盘链接检测
-    "copy_pwd_to_clipboard": True      # 新增：打开网盘链接时复制提取码到剪贴板
+    "enable_netdisk_detection": True,
+    "copy_pwd_to_clipboard": True,
+    "preview_delay": 0.3,  # 新增：预览延迟时间（秒）
+    "preview_animation_speed": 180,  # 新增：预览动画速度（毫秒）
+    "enable_preview_cache": True,  # 新增：启用预览内容缓存
+    "multi_monitor_support": True  # 新增：多显示器支持
 }
 
 def load_config():
@@ -519,7 +523,7 @@ def get_clipboard_content(truncate=True):
                         if is_url(data):
                             return {
                                 "type": "网址", 
-                                "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
+                                "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]]+ "...",
                                 "raw_content": data  # 保存原始内容
                             }
                         
@@ -1031,68 +1035,131 @@ def request_admin_and_register():
     )
 
 def main():
-    # 作为主程序运行
+    """主程序入口"""
     import pystray
     import threading
     import clipboard_preview
     from PyQt5.QtCore import QTimer
+    import time
     
-    # 加载配置
-    load_config()
-    
-    # 初始化QApplication
-    log.debug('初始化QApplication...')
-    app = QApplication([]) if not QApplication.instance() else QApplication.instance()
-    
-    # 启动剪贴板监视线程
-    log.debug('启动剪贴板监视线程...')
-    monitor_thread = threading.Thread(target=monitor_clipboard, daemon=True)
-    monitor_thread.start()
-    
-    # 初始化剪贴板预览控制器（在主线程中）
-    preview_controller = clipboard_preview.ClipboardPreviewController(lambda: get_clipboard_content(truncate=False))
-    preview_controller.setup(app)
-    
-    # 显示系统托盘图标
-    icon = setup_tray_icon()
-    
-    # 修改托盘菜单，添加注册协议选项，并更新退出功能
-    def create_menu():
-        return pystray.Menu(
-            pystray.MenuItem('清空当前剪贴板', lambda: clear_clipboard()),
-            pystray.MenuItem('网盘链接检测', lambda: toggle_netdisk_detection()),
-            pystray.MenuItem('访问网盘时复制提取码', lambda: toggle_copy_pwd()),
-            pystray.MenuItem('注册网盘协议处理器', lambda: request_admin_and_register()),
-            pystray.MenuItem('退出', lambda: exit_application(icon=icon, app=app))
+    try:
+        # 加载配置
+        load_config()
+        log.debug('配置加载完成')
+        
+        # 初始化QApplication
+        log.debug('初始化QApplication...')
+        app = QApplication([]) if not QApplication.instance() else QApplication.instance()
+        
+        # 设置应用程序属性
+        app.setQuitOnLastWindowClosed(False)  # 防止关闭预览窗口时退出程序
+        
+        # 启动剪贴板监视线程
+        log.debug('启动剪贴板监视线程...')
+        monitor_thread = threading.Thread(target=monitor_clipboard, daemon=True)
+        monitor_thread.start()
+        
+        # 等待一下让监视线程启动
+        time.sleep(0.1)
+        
+        # 初始化剪贴板预览控制器（在主线程中）
+        log.debug('初始化剪贴板预览控制器...')
+        preview_controller = clipboard_preview.ClipboardPreviewController(
+            lambda: get_clipboard_content(truncate=False)
         )
-    
-    icon.menu = create_menu()
-    
-    # 使用QTimer定期处理事件，而不是在pystray的回调中这样做
-    qt_timer = QTimer()
-    qt_timer.timeout.connect(app.processEvents)
-    qt_timer.start(100)
-    
-    # 以非阻塞方式启动pystray
-    icon_thread = threading.Thread(target=icon.run, daemon=True)
-    icon_thread.start()
-    
-    # 启动Qt事件循环（主循环）
-    sys.exit(app.exec_())        
+        preview_controller.setup(app)
+        
+        # 应用配置到预览控制器
+        if config.get("preview_delay"):
+            preview_controller.set_preview_delay(config["preview_delay"])
+        
+        # 显示系统托盘图标
+        log.debug('设置系统托盘...')
+        icon = setup_tray_icon()
+        
+        # 修改托盘菜单，添加预览设置选项
+        def create_menu():
+            return pystray.Menu(
+                pystray.MenuItem('清空当前剪贴板', lambda: clear_clipboard()),
+                pystray.MenuItem('网盘链接检测', lambda: toggle_netdisk_detection()),
+                pystray.MenuItem('访问网盘时复制提取码', lambda: toggle_copy_pwd()),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem('预览设置', pystray.Menu(
+                    pystray.MenuItem('快速预览 (0.2秒)', lambda: set_preview_delay(0.2, preview_controller)),
+                    pystray.MenuItem('标准预览 (0.3秒)', lambda: set_preview_delay(0.3, preview_controller)),
+                    pystray.MenuItem('慢速预览 (0.5秒)', lambda: set_preview_delay(0.5, preview_controller)),
+                    pystray.MenuItem('清除预览缓存', lambda: preview_controller.clear_cache())
+                )),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem('注册网盘协议处理器', lambda: request_admin_and_register()),
+                pystray.MenuItem('退出', lambda: exit_application(icon=icon, app=app))
+            )
+        
+        icon.menu = create_menu()
+        
+        # 使用QTimer定期处理事件
+        qt_timer = QTimer()
+        qt_timer.timeout.connect(app.processEvents)
+        qt_timer.start(50)  # 提高响应频率
+        
+        # 以非阻塞方式启动pystray
+        icon_thread = threading.Thread(target=icon.run, daemon=True)
+        icon_thread.start()
+        
+        log.debug('应用程序启动完成，进入主循环')
+        
+        # 启动Qt事件循环（主循环）
+        sys.exit(app.exec_())
+        
+    except Exception as e:
+        log.error(f'主程序启动失败: {e}')
+        import traceback
+        log.error(traceback.format_exc())
+        
+        # 尝试显示错误通知
+        try:
+            toast('程序启动失败', f'错误: {str(e)}')
+        except:
+            pass
+        
+        sys.exit(1)
 
-# 创建完全退出程序的函数
+def set_preview_delay(delay: float, preview_controller):
+    """设置预览延迟时间并保存到配置"""
+    try:
+        preview_controller.set_preview_delay(delay)
+        config["preview_delay"] = delay
+        save_config()
+        toast('预览设置', f'预览延迟已设置为 {delay} 秒')
+    except Exception as e:
+        log.error(f'设置预览延迟失败: {e}')
+        toast('设置失败', str(e))
+
 def exit_application(code: int = 0, icon: Icon = None, app: QApplication = None):
+    """完全退出程序，不显示终端窗口"""
     # 检查是否提供了icon和app参数
     if icon is not None:
-        # 停止托盘图标
-        icon.stop()
-    if app is not None:
-        # 退出Qt应用程序
-        app.quit()
+        try:
+            icon.stop()
+        except:
+            pass
     
-    pid = os.getpid()
+    if app is not None:
+        try:
+            app.quit()
+        except:
+            pass
+    
+    # 使用Windows API直接终止进程，避免调用外部命令
     try:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
+        pid = os.getpid()
+        # 获取进程句柄
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(1, False, pid)
+        # 终止进程
+        kernel32.TerminateProcess(handle, code)
+        kernel32.CloseHandle(handle)
     except Exception as e:
-        print(f"强制终止失败: {e}")
-        os._exit(1)    # 强制终止
+        # 备用方案：使用os._exit
+        print(f"使用Windows API终止失败: {e}")
+        os._exit(code)

@@ -7,6 +7,7 @@ from PyQt5.QtGui import QPixmap, QFontDatabase, QPalette, QColor, QPainter, QLin
 import win32api
 import keyboard
 import threading
+import time
 import log
 import re
 
@@ -716,7 +717,7 @@ class PreviewWindow(QMainWindow):
         
         # 创建主窗口部件
         central_widget = QWidget(self)
-        central_widget.setObjectName("central_widget")  # 设置对象名称用于样式选择器
+        central_widget.setObjectName("central_widget")
         self.setCentralWidget(central_widget)
         central_widget.setStyleSheet(StyleSheet.MAIN_WINDOW)
         
@@ -750,16 +751,18 @@ class PreviewWindow(QMainWindow):
         self.layout.addWidget(content_container)
         
         # 设置初始大小和限制 - 优化尺寸
-        self.setMinimumWidth(450)  # 稍微增加
+        self.setMinimumWidth(450)
         self.setMinimumHeight(180)
-        self.setMaximumHeight(900)  # 增加最大高度
-        self.setMaximumWidth(800)   # 增加最大宽度
+        self.setMaximumHeight(900)
+        self.setMaximumWidth(800)
         
-        # 设置初始透明度和缩放
+        # 设置初始透明度
         self.setWindowOpacity(0.0)
         
         # 应用基础样式
         self.setStyleSheet(StyleSheet.get_base_style())
+        
+        log.debug("预览窗口UI初始化完成")
     
     def update_content(self, content):
         """更新窗口内容"""
@@ -779,51 +782,87 @@ class PreviewWindow(QMainWindow):
         self.adjustSize()
     
     def position_at_cursor(self):
-        """将窗口定位到鼠标光标位置附近"""
-        cursor_pos = QPoint(*win32api.GetCursorPos())
-        screen = QDesktopWidget().screenGeometry()
-        
-        # 计算水平位置，避免窗口超出屏幕
-        if cursor_pos.x() + self.width() > screen.width():
-            x = screen.width() - self.width()
-        else:
-            x = cursor_pos.x()
+        """智能定位窗口到鼠标光标位置附近"""
+        try:
+            cursor_pos = QPoint(*win32api.GetCursorPos())
             
-        # 计算垂直位置，在光标下方显示，除非超出屏幕底部
-        if cursor_pos.y() + 20 + self.height() > screen.height():
-            y = cursor_pos.y() - self.height() - 10
-        else:
-            y = cursor_pos.y() + 20
+            # 获取当前显示器信息
+            desktop = QDesktopWidget()
+            screen_number = desktop.screenNumber(cursor_pos)
+            screen_geometry = desktop.screenGeometry(screen_number)
             
-        self.move(x, y)
+            # 计算窗口尺寸
+            window_width = self.width()
+            window_height = self.height()
+            
+            # 设置边距
+            margin = 20
+            
+            # 智能水平定位
+            if cursor_pos.x() + window_width + margin > screen_geometry.right():
+                # 鼠标右侧空间不足，放到左侧
+                x = max(screen_geometry.left(), cursor_pos.x() - window_width - margin)
+            else:
+                # 鼠标右侧有足够空间
+                x = cursor_pos.x() + margin
+            
+            # 智能垂直定位
+            if cursor_pos.y() + window_height + margin > screen_geometry.bottom():
+                # 鼠标下方空间不足，放到上方
+                y = max(screen_geometry.top(), cursor_pos.y() - window_height - margin)
+            else:
+                # 鼠标下方有足够空间
+                y = cursor_pos.y() + margin
+            
+            # 确保窗口完全在屏幕内
+            x = max(screen_geometry.left(), min(x, screen_geometry.right() - window_width))
+            y = max(screen_geometry.top(), min(y, screen_geometry.bottom() - window_height))
+            
+            self.move(x, y)
+            log.debug(f"窗口定位到: ({x}, {y}), 屏幕: {screen_number}")
+            
+        except Exception as e:
+            log.error(f"窗口定位失败: {e}")
+            # 降级处理：简单定位
+            try:
+                cursor_pos = QPoint(*win32api.GetCursorPos())
+                self.move(cursor_pos.x() + 20, cursor_pos.y() + 20)
+            except:
+                pass
     
     def show_with_fade(self):
         """使用流畅的淡入和缩放效果显示窗口"""
-        # 定位窗口位置
-        self.position_at_cursor()
-        
-        # 初始状态
-        self.setWindowOpacity(0.0)
-        self.show()
-        
-        # 停止现有动画
-        if self.opacity_animation:
-            self.opacity_animation.stop()
-        if self.scale_animation:
-            self.scale_animation.stop()
+        try:
+            # 定位窗口位置
+            self.position_at_cursor()
             
-        # 创建透明度动画
-        self.opacity_animation = QPropertyAnimation(self, b"windowOpacity")
-        self.opacity_animation.setDuration(200)  # 200ms 快速显示
-        self.opacity_animation.setStartValue(0.0)
-        self.opacity_animation.setEndValue(1.0)
-        self.opacity_animation.setEasingCurve(QEasingCurve.OutCubic)
-        
-        # 启动动画
-        self.opacity_animation.start()
-        
-        # 添加轻微的缩放效果（通过调整几何位置模拟）
-        self.animate_scale_in()
+            # 初始状态
+            self.setWindowOpacity(0.0)
+            self.show()
+            
+            # 停止现有动画
+            if self.opacity_animation:
+                self.opacity_animation.stop()
+            if self.scale_animation:
+                self.scale_animation.stop()
+                
+            # 创建透明度动画
+            self.opacity_animation = QPropertyAnimation(self, b"windowOpacity")
+            self.opacity_animation.setDuration(180)  # 稍微缩短动画时间
+            self.opacity_animation.setStartValue(0.0)
+            self.opacity_animation.setEndValue(1.0)
+            self.opacity_animation.setEasingCurve(QEasingCurve.OutCubic)
+            
+            # 启动动画
+            self.opacity_animation.start()
+            
+            # 添加轻微的缩放效果
+            self.animate_scale_in()
+            
+            log.debug("预览窗口淡入动画开始")
+            
+        except Exception as e:
+            log.error(f"显示预览窗口失败: {e}")
     
     def animate_scale_in(self):
         """模拟缩放动画效果"""
@@ -848,18 +887,26 @@ class PreviewWindow(QMainWindow):
     
     def hide_with_fade(self):
         """使用淡出效果隐藏窗口"""
-        if self.opacity_animation:
-            self.opacity_animation.stop()
+        try:
+            if self.opacity_animation:
+                self.opacity_animation.stop()
+                
+            # 创建淡出动画
+            self.opacity_animation = QPropertyAnimation(self, b"windowOpacity")
+            self.opacity_animation.setDuration(120)  # 快速隐藏
+            self.opacity_animation.setStartValue(self.windowOpacity())
+            self.opacity_animation.setEndValue(0.0)
+            self.opacity_animation.setEasingCurve(QEasingCurve.InCubic)
+            self.opacity_animation.finished.connect(self.hide)
             
-        # 创建淡出动画
-        self.opacity_animation = QPropertyAnimation(self, b"windowOpacity")
-        self.opacity_animation.setDuration(150)  # 150ms 快速隐藏
-        self.opacity_animation.setStartValue(self.windowOpacity())
-        self.opacity_animation.setEndValue(0.0)
-        self.opacity_animation.setEasingCurve(QEasingCurve.InCubic)
-        self.opacity_animation.finished.connect(self.hide)
-        
-        self.opacity_animation.start()
+            self.opacity_animation.start()
+            
+            log.debug("预览窗口淡出动画开始")
+            
+        except Exception as e:
+            log.error(f"隐藏预览窗口失败: {e}")
+            # 降级处理：直接隐藏
+            self.hide()
 
 class ClipboardPreviewController(QObject):
     """控制剪贴板预览窗口的显示和隐藏"""
@@ -870,8 +917,17 @@ class ClipboardPreviewController(QObject):
         self.signals = ClipboardSignals()
         self.preview_window = None
         self.ctrl_pressed = False
+        self.ctrl_press_time = 0  # 记录Ctrl按下的时间
         self.preview_timer = None
         self.clipboard_content = None
+        self.cached_content = None  # 缓存剪贴板内容
+        self.last_clipboard_check = 0  # 上次检查剪贴板的时间
+        self.preview_delay = 0.3  # 可配置的预览延迟时间（秒）
+        self.is_preview_visible = False  # 跟踪预览窗口状态
+        
+        # 键盘事件状态跟踪
+        self.left_ctrl_pressed = False
+        self.right_ctrl_pressed = False
         
     def setup(self, app):
         """初始化控制器"""
@@ -888,106 +944,164 @@ class ClipboardPreviewController(QObject):
         # 启动键盘监听线程
         self.keyboard_thread = threading.Thread(target=self.keyboard_monitor, daemon=True)
         self.keyboard_thread.start()
+        
+        log.debug("剪贴板预览控制器初始化完成")
     
     def keyboard_monitor(self):
         """在单独的线程中监听键盘事件"""
         try:
-            # 使用keyboard库监听Ctrl键，更简单可靠
-            keyboard.on_press_key("ctrl", self.kb_on_ctrl_pressed)
-            keyboard.on_release_key("ctrl", self.kb_on_ctrl_released)
-            log.debug("使用keyboard库监听Ctrl键")
+            # 监听左右Ctrl键
+            keyboard.on_press_key("left ctrl", self.on_left_ctrl_pressed)
+            keyboard.on_release_key("left ctrl", self.on_left_ctrl_released)
+            keyboard.on_press_key("right ctrl", self.on_right_ctrl_pressed)
+            keyboard.on_release_key("right ctrl", self.on_right_ctrl_released)
             
-            # 以下代码保留但不再使用，因为win32gui的热键监听在多线程环境中可能不稳定
-            """
-            # 注册全局热键 (Ctrl)
-            ctrl_down_id = 1
-            ctrl_up_id = 2
+            # 备用：监听通用Ctrl键（以防上面的不工作）
+            keyboard.on_press_key("ctrl", self.on_ctrl_pressed_backup)
+            keyboard.on_release_key("ctrl", self.on_ctrl_released_backup)
             
-            if win32gui.RegisterHotKey(None, ctrl_down_id, 0, win32con.VK_CONTROL):
-                print("Ctrl键监听已启动")
-            else:
-                print("Ctrl键监听启动失败")
-                
-            if win32gui.RegisterHotKey(None, ctrl_up_id, win32con.MOD_CONTROL, win32con.VK_CONTROL):
-                print("Ctrl键释放监听已启动")
-            else:
-                print("Ctrl键释放监听启动失败")
-                
-            # 消息循环
-            try:
-                msg = win32gui.GetMessage(None, 0, 0)
-                while msg:
-                    if msg[1][0] == ctrl_down_id:
-                        self.on_ctrl_pressed()
-                    elif msg[1][0] == ctrl_up_id:
-                        self.on_ctrl_released()
-                    msg = win32gui.GetMessage(None, 0, 0)
-            finally:
-                win32gui.UnregisterHotKey(None, ctrl_down_id)
-                win32gui.UnregisterHotKey(None, ctrl_up_id)
-            """
+            log.debug("键盘监听已启动")
+            
         except Exception as e:
-            log.error(f"键盘监听错误: {e}")
+            log.error(f"键盘监听启动失败: {e}")
             
-            # 确保即使出错也能启用键盘监听
+            # 降级处理：使用通用Ctrl键监听
             try:
-                keyboard.on_press_key("ctrl", self.kb_on_ctrl_pressed)
-                keyboard.on_release_key("ctrl", self.kb_on_ctrl_released)
-                log.debug("降级到keyboard库监听")
+                keyboard.on_press_key("ctrl", self.on_ctrl_pressed_backup)
+                keyboard.on_release_key("ctrl", self.on_ctrl_released_backup)
+                log.debug("使用备用键盘监听方案")
             except Exception as e2:
-                log.error(f"键盘监听完全失败: {e2}")
+                log.error(f"备用键盘监听也失败: {e2}")
     
-    def on_ctrl_pressed(self):
-        """Ctrl键被按下时的处理函数"""
+    def on_left_ctrl_pressed(self, event):
+        """左Ctrl键被按下"""
+        self.left_ctrl_pressed = True
+        self.handle_ctrl_press()
+    
+    def on_left_ctrl_released(self, event):
+        """左Ctrl键被释放"""
+        self.left_ctrl_pressed = False
+        if not self.right_ctrl_pressed:
+            self.handle_ctrl_release()
+    
+    def on_right_ctrl_pressed(self, event):
+        """右Ctrl键被按下"""
+        self.right_ctrl_pressed = True
+        self.handle_ctrl_press()
+    
+    def on_right_ctrl_released(self, event):
+        """右Ctrl键被释放"""
+        self.right_ctrl_pressed = False
+        if not self.left_ctrl_pressed:
+            self.handle_ctrl_release()
+    
+    def on_ctrl_pressed_backup(self, event):
+        """备用Ctrl按下处理"""
+        if not self.ctrl_pressed:
+            self.handle_ctrl_press()
+    
+    def on_ctrl_released_backup(self, event):
+        """备用Ctrl释放处理"""
+        if not (self.left_ctrl_pressed or self.right_ctrl_pressed):
+            self.handle_ctrl_release()
+    
+    def handle_ctrl_press(self):
+        """处理Ctrl键按下事件"""
         if not self.ctrl_pressed:
             self.ctrl_pressed = True
+            self.ctrl_press_time = time.time()
+            
+            # 取消之前的计时器
             if self.preview_timer:
                 self.preview_timer.cancel()
-            self.preview_timer = threading.Timer(0.5, self.prepare_preview)
+            
+            # 启动新的计时器
+            self.preview_timer = threading.Timer(self.preview_delay, self.prepare_preview)
             self.preview_timer.start()
+            
+            log.debug(f"Ctrl键按下，启动{self.preview_delay}秒延迟计时器")
     
-    def on_ctrl_released(self):
-        """Ctrl键被释放时的处理函数"""
-        self.ctrl_pressed = False
-        if self.preview_timer:
-            self.preview_timer.cancel()
-            self.preview_timer = None
-        self.signals.hide_preview.emit()
-    
-    def kb_on_ctrl_pressed(self, event):
-        """键盘库的Ctrl按下处理"""
-        self.on_ctrl_pressed()
-    
-    def kb_on_ctrl_released(self, event):
-        """键盘库的Ctrl释放处理"""
-        self.on_ctrl_released()
+    def handle_ctrl_release(self):
+        """处理Ctrl键释放事件"""
+        if self.ctrl_pressed:
+            self.ctrl_pressed = False
+            ctrl_hold_duration = time.time() - self.ctrl_press_time
+            
+            # 取消计时器
+            if self.preview_timer:
+                self.preview_timer.cancel()
+                self.preview_timer = None
+            
+            # 隐藏预览窗口
+            if self.is_preview_visible:
+                self.signals.hide_preview.emit()
+            
+            log.debug(f"Ctrl键释放，持续时间: {ctrl_hold_duration:.2f}秒")
     
     def prepare_preview(self):
         """获取剪贴板内容并准备预览"""
-        if self.ctrl_pressed:
-            try:
+        if not self.ctrl_pressed:
+            return
+            
+        try:
+            current_time = time.time()
+            
+            # 检查是否需要重新获取剪贴板内容（缓存机制）
+            if (self.cached_content is None or 
+                current_time - self.last_clipboard_check > 1.0):  # 1秒缓存
+                
+                log.debug("获取新的剪贴板内容")
                 content = self.get_clipboard_content()
                 
-                # 如果内容是字典而且包含raw_content字段，使用它
                 if isinstance(content, dict) and "content" in content:
-                    self.signals.update_preview.emit(content)
-                    self.signals.show_preview.emit()
+                    self.cached_content = content
+                    self.last_clipboard_check = current_time
                 else:
                     log.warning(f"意外的剪贴板内容格式: {type(content)}")
-            except Exception as e:
-                log.error(f"预览准备错误: {e}")
+                    return
+            else:
+                log.debug("使用缓存的剪贴板内容")
+                content = self.cached_content
+            
+            # 只有在仍然按住Ctrl键时才显示预览
+            if self.ctrl_pressed and content:
+                self.signals.update_preview.emit(content)
+                self.signals.show_preview.emit()
+                
+        except Exception as e:
+            log.error(f"预览准备错误: {e}")
     
     def update_preview_window(self, content):
         """更新预览窗口内容（在主线程中执行）"""
         if self.preview_window:
             self.preview_window.update_content(content)
+            log.debug("预览窗口内容已更新")
     
     def show_preview_window(self):
         """显示预览窗口（在主线程中执行）"""
         if self.preview_window and self.ctrl_pressed:
             self.preview_window.show_with_fade()
+            self.is_preview_visible = True
+            log.debug("预览窗口已显示")
     
     def hide_preview_window(self):
         """隐藏预览窗口（在主线程中执行）"""
-        if self.preview_window:
-            self.preview_window.hide_with_fade()  # 使用淡出动画
+        if self.preview_window and self.is_preview_visible:
+            self.preview_window.hide_with_fade()
+            self.is_preview_visible = False
+            log.debug("预览窗口已隐藏")
+    
+    def set_preview_delay(self, delay_seconds: float):
+        """设置预览延迟时间
+        
+        Args:
+            delay_seconds: 延迟时间（秒），范围：0.1-2.0
+        """
+        self.preview_delay = max(0.1, min(2.0, delay_seconds))
+        log.debug(f"预览延迟时间设置为: {self.preview_delay}秒")
+    
+    def clear_cache(self):
+        """清除缓存的剪贴板内容"""
+        self.cached_content = None
+        self.last_clipboard_check = 0
+        log.debug("剪贴板内容缓存已清除")
