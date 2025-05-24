@@ -1,9 +1,9 @@
 import os
 from PyQt5.QtWidgets import (QApplication, QLabel, QMainWindow, QVBoxLayout, 
                             QWidget, QDesktopWidget, QScrollArea, QPushButton,
-                            QHBoxLayout, QSizePolicy, QFrame)
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QObject, QEvent
-from PyQt5.QtGui import QPixmap, QFontDatabase
+                            QHBoxLayout, QSizePolicy, QFrame, QGraphicsDropShadowEffect)
+from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QObject, QEvent, QEasingCurve, QPropertyAnimation, QRect
+from PyQt5.QtGui import QPixmap, QFontDatabase, QPalette, QColor, QPainter, QLinearGradient
 import win32api
 import keyboard
 import threading
@@ -156,50 +156,73 @@ class StyleSheet:
                 }
             """
     
-    # 主窗口样式
+    # 主窗口样式 - 现代化设计
     MAIN_WINDOW = """
-        background-color: rgba(40, 40, 40, 240);
-        border-radius: 10px;
-        border: 1px solid rgba(255, 255, 255, 30);
+        QWidget#central_widget {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(45, 45, 55, 250),
+                stop:0.5 rgba(35, 35, 45, 245),
+                stop:1 rgba(25, 25, 35, 240));
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 40);
+        }
     """
     
-    # 标题栏样式
+    # 标题栏样式 - 毛玻璃效果
     TITLE_BAR = """
-        background-color: rgba(60, 60, 60, 200);
-        border-top-left-radius: 10px;
-        border-top-right-radius: 10px;
-        padding: 5px;
+        QWidget {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(70, 70, 80, 200),
+                stop:1 rgba(50, 50, 60, 180));
+            border-top-left-radius: 15px;
+            border-top-right-radius: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 20);
+            padding: 8px;
+        }
     """
     
-    # 标题样式
+    # 标题样式 - 现代字体
     TITLE = """
-        font-weight: bold;
-        font-size: 15px;
-        color: #ffffff;
-        padding-left: 5px;
+        QLabel {
+            font-weight: 600;
+            font-size: 16px;
+            color: #ffffff;
+            padding-left: 8px;
+            background: transparent;
+        }
     """
     
-    # 内容区域样式
+    # 内容区域样式 - 优化间距
     CONTENT_AREA = """
-        background-color: transparent;
-        padding: 8px;
+        QWidget {
+            background-color: transparent;
+            padding: 15px;
+            border-bottom-left-radius: 15px;
+            border-bottom-right-radius: 15px;
+        }
     """
     
-    # 内容标签样式
+    # 内容标签样式 - 现代卡片设计
     @classmethod
     def get_content_label_style(cls):
         """获取内容标签样式，针对代码应用自定义字体"""
         cls.load_custom_font()
         
         base_style = """
-            color: #e0e0e0;
-            padding: 10px;
-            border: none;
-            border-radius: 5px;
-            background-color: rgba(0, 0, 0, 20);
+            QLabel {
+                color: #f0f0f0;
+                padding: 15px;
+                border: none;
+                border-radius: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 255, 255, 8),
+                    stop:1 rgba(255, 255, 255, 4));
+                border: 1px solid rgba(255, 255, 255, 12);
+                line-height: 1.4;
+            }
         """
         
-        # 无论字体加载是否成功，都尝试应用字体名称，并添加连字支持
+        # 字体设置保持不变
         return base_style + f"""
             pre, code, .highlight {{
                 font-family: '{cls.FONT_NAME}', '{cls.FONT_FAMILY}', 'Consolas', 'Courier New', monospace;
@@ -210,7 +233,7 @@ class StyleSheet:
             }}
         """
     
-    # 滚动区域样式
+    # 滚动区域样式 - 现代滚动条
     SCROLL_AREA = """
         QScrollArea {
             border: none;
@@ -219,15 +242,25 @@ class StyleSheet:
         
         QScrollBar:vertical {
             border: none;
-            background: rgba(60, 60, 60, 100);
-            width: 12px;
-            border-radius: 6px;
+            background: rgba(255, 255, 255, 15);
+            width: 8px;
+            border-radius: 4px;
+            margin: 0px;
         }
         
         QScrollBar::handle:vertical {
-            background: rgba(180, 180, 180, 150);
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 rgba(180, 180, 200, 180),
+                stop:1 rgba(160, 160, 180, 160));
             min-height: 24px;
-            border-radius: 6px;
+            border-radius: 4px;
+            margin: 2px;
+        }
+        
+        QScrollBar::handle:vertical:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 rgba(200, 200, 220, 200),
+                stop:1 rgba(180, 180, 200, 180));
         }
         
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -240,15 +273,25 @@ class StyleSheet:
         
         QScrollBar:horizontal {
             border: none;
-            background: rgba(60, 60, 60, 100);
-            height: 12px;
-            border-radius: 6px;
+            background: rgba(255, 255, 255, 15);
+            height: 8px;
+            border-radius: 4px;
+            margin: 0px;
         }
         
         QScrollBar::handle:horizontal {
-            background: rgba(180, 180, 180, 150);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(180, 180, 200, 180),
+                stop:1 rgba(160, 160, 180, 160));
             min-width: 24px;
-            border-radius: 6px;
+            border-radius: 4px;
+            margin: 2px;
+        }
+        
+        QScrollBar::handle:horizontal:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(200, 200, 220, 200),
+                stop:1 rgba(180, 180, 200, 180));
         }
         
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
@@ -260,31 +303,40 @@ class StyleSheet:
         }
     """
     
-    # 按钮样式
+    # 按钮样式 - 现代化按钮
     BUTTON = """
         QPushButton {
-            background-color: rgba(70, 130, 180, 150);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(100, 150, 200, 160),
+                stop:1 rgba(70, 120, 170, 140));
             color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 5px;
-            font-size: 12px;
+            border: 1px solid rgba(255, 255, 255, 30);
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
         }
         
         QPushButton:hover {
-            background-color: rgba(70, 130, 180, 200);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(120, 170, 220, 180),
+                stop:1 rgba(90, 140, 190, 160));
+            border: 1px solid rgba(255, 255, 255, 50);
         }
         
         QPushButton:pressed {
-            background-color: rgba(70, 130, 180, 220);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 rgba(80, 130, 180, 200),
+                stop:1 rgba(50, 100, 150, 180));
+            border: 1px solid rgba(255, 255, 255, 60);
         }
     """
     
-    # 不同类型内容的强调色
+    # 优化的类型颜色 - 更现代的配色
     TYPE_COLORS = {
-        "文本": "#e0e0e0",
-        "网址": "#4fc3f7",
-        "邮箱": "#81c784",
+        "文本": "#f0f0f0",
+        "网址": "#64b5f6",
+        "邮箱": "#81c784", 
         "网盘链接": "#ffb74d",
         "图片": "#ba68c8",
         "文件": "#4db6ac",
@@ -593,21 +645,29 @@ class TitleBar(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(30)
+        self.setFixedHeight(40)  # 增加高度
         self.initUI()
         
     def initUI(self):
         """初始化UI"""
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setContentsMargins(15, 5, 15, 5)  # 调整边距
         
         # 标题
         self.title_label = QLabel("剪贴板内容")
         self.title_label.setStyleSheet(StyleSheet.TITLE)
         
-        # 类型标签
+        # 类型标签 - 现代化样式
         self.type_label = QLabel("")
-        self.type_label.setStyleSheet("color: #aaaaaa; font-size: 13px;")
+        self.type_label.setStyleSheet("""
+            color: rgba(255, 255, 255, 180);
+            font-size: 14px;
+            font-weight: 400;
+            background: rgba(255, 255, 255, 15);
+            border-radius: 12px;
+            padding: 4px 12px;
+            margin-left: 10px;
+        """)
         
         # 添加到布局
         layout.addWidget(self.title_label)
@@ -620,11 +680,20 @@ class TitleBar(QWidget):
     def set_title(self, title, content_type):
         """设置标题和内容类型"""
         self.title_label.setText(title)
-        self.type_label.setText(f"({content_type})")
+        self.type_label.setText(content_type)
         
         # 针对不同类型设置颜色
         color = StyleSheet.TYPE_COLORS.get(content_type, "#e0e0e0")
-        self.type_label.setStyleSheet(f"color: {color}; font-size: 13px;")
+        self.type_label.setStyleSheet(f"""
+            color: {color};
+            font-size: 14px;
+            font-weight: 500;
+            background: rgba(255, 255, 255, 20);
+            border-radius: 12px;
+            padding: 4px 12px;
+            margin-left: 10px;
+            border: 1px solid rgba(255, 255, 255, 30);
+        """)
 
 class PreviewWindow(QMainWindow):
     """无边框窗口，用于预览剪贴板内容"""
@@ -633,7 +702,10 @@ class PreviewWindow(QMainWindow):
         super().__init__()
         self.initUI()
         self.fade_timer = None
+        self.scale_animation = None
+        self.opacity_animation = None
         self.opacity = 0.0
+        self.scale_factor = 0.8
         
     def initUI(self):
         """初始化用户界面"""
@@ -644,8 +716,16 @@ class PreviewWindow(QMainWindow):
         
         # 创建主窗口部件
         central_widget = QWidget(self)
+        central_widget.setObjectName("central_widget")  # 设置对象名称用于样式选择器
         self.setCentralWidget(central_widget)
         central_widget.setStyleSheet(StyleSheet.MAIN_WINDOW)
+        
+        # 添加阴影效果
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(25)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 8)
+        central_widget.setGraphicsEffect(shadow)
         
         # 设置布局
         self.layout = QVBoxLayout(central_widget)
@@ -669,13 +749,13 @@ class PreviewWindow(QMainWindow):
         # 添加内容区域到布局
         self.layout.addWidget(content_container)
         
-        # 设置初始大小和限制
-        self.setMinimumWidth(400)  # 增加默认宽度
-        self.setMinimumHeight(150) # 增加默认高度
-        self.setMaximumHeight(800) # 增加最大高度
-        self.setMaximumWidth(700)  # 增加最大宽度
+        # 设置初始大小和限制 - 优化尺寸
+        self.setMinimumWidth(450)  # 稍微增加
+        self.setMinimumHeight(180)
+        self.setMaximumHeight(900)  # 增加最大高度
+        self.setMaximumWidth(800)   # 增加最大宽度
         
-        # 设置初始透明度
+        # 设置初始透明度和缩放
         self.setWindowOpacity(0.0)
         
         # 应用基础样式
@@ -718,30 +798,68 @@ class PreviewWindow(QMainWindow):
         self.move(x, y)
     
     def show_with_fade(self):
-        """使用淡入效果显示窗口"""
+        """使用流畅的淡入和缩放效果显示窗口"""
         # 定位窗口位置
         self.position_at_cursor()
         
-        self.opacity = 0.0
-        self.setWindowOpacity(self.opacity)
+        # 初始状态
+        self.setWindowOpacity(0.0)
         self.show()
         
-        # 如果计时器已经存在，先停止
-        if self.fade_timer:
-            self.fade_timer.stop()
+        # 停止现有动画
+        if self.opacity_animation:
+            self.opacity_animation.stop()
+        if self.scale_animation:
+            self.scale_animation.stop()
             
-        # 创建动画计时器
-        self.fade_timer = QTimer(self)
-        self.fade_timer.timeout.connect(self.fade_in_step)
-        self.fade_timer.start(20)  # 每20毫秒更新一次
+        # 创建透明度动画
+        self.opacity_animation = QPropertyAnimation(self, b"windowOpacity")
+        self.opacity_animation.setDuration(200)  # 200ms 快速显示
+        self.opacity_animation.setStartValue(0.0)
+        self.opacity_animation.setEndValue(1.0)
+        self.opacity_animation.setEasingCurve(QEasingCurve.OutCubic)
+        
+        # 启动动画
+        self.opacity_animation.start()
+        
+        # 添加轻微的缩放效果（通过调整几何位置模拟）
+        self.animate_scale_in()
     
-    def fade_in_step(self):
-        """逐步增加透明度"""
-        self.opacity += 0.1
-        if self.opacity >= 1.0:
-            self.opacity = 1.0
-            self.fade_timer.stop()
-        self.setWindowOpacity(self.opacity)
+    def animate_scale_in(self):
+        """模拟缩放动画效果"""
+        original_geometry = self.geometry()
+        start_geometry = QRect(
+            original_geometry.x() + int(original_geometry.width() * 0.1),
+            original_geometry.y() + int(original_geometry.height() * 0.1),
+            int(original_geometry.width() * 0.8),
+            int(original_geometry.height() * 0.8)
+        )
+        
+        self.setGeometry(start_geometry)
+        
+        # 创建几何动画
+        self.scale_animation = QPropertyAnimation(self, b"geometry")
+        self.scale_animation.setDuration(200)
+        self.scale_animation.setStartValue(start_geometry)
+        self.scale_animation.setEndValue(original_geometry)
+        self.scale_animation.setEasingCurve(QEasingCurve.OutBack)  # 弹性效果
+        
+        self.scale_animation.start()
+    
+    def hide_with_fade(self):
+        """使用淡出效果隐藏窗口"""
+        if self.opacity_animation:
+            self.opacity_animation.stop()
+            
+        # 创建淡出动画
+        self.opacity_animation = QPropertyAnimation(self, b"windowOpacity")
+        self.opacity_animation.setDuration(150)  # 150ms 快速隐藏
+        self.opacity_animation.setStartValue(self.windowOpacity())
+        self.opacity_animation.setEndValue(0.0)
+        self.opacity_animation.setEasingCurve(QEasingCurve.InCubic)
+        self.opacity_animation.finished.connect(self.hide)
+        
+        self.opacity_animation.start()
 
 class ClipboardPreviewController(QObject):
     """控制剪贴板预览窗口的显示和隐藏"""
@@ -872,4 +990,4 @@ class ClipboardPreviewController(QObject):
     def hide_preview_window(self):
         """隐藏预览窗口（在主线程中执行）"""
         if self.preview_window:
-            self.preview_window.hide()
+            self.preview_window.hide_with_fade()  # 使用淡出动画

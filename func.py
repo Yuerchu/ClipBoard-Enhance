@@ -18,6 +18,24 @@ from netdisk_rules import NETDISK_RULES
 import log
 from pystray._base import Icon
 from PyQt5.QtWidgets import QApplication
+import threading
+import ctypes
+import win32api
+
+# 添加线程锁，确保剪贴板操作的线程安全
+clipboard_lock = threading.RLock()
+# 添加最大重试次数
+MAX_CLIPBOARD_RETRY = 3
+# 添加重试延迟时间（秒）
+CLIPBOARD_RETRY_DELAY = 0.1
+
+# 全局变量：跟踪每个线程的剪贴板打开状态
+clipboard_open_by_thread = {}
+
+# 自定义错误类，用于控制流程
+class ClipboardError(Exception):
+    """剪贴板操作错误"""
+    pass
 
 def clean_text_for_netdisk_detection(text):
     """
@@ -87,7 +105,6 @@ def load_config():
 
 def save_config():
     """保存配置到文件"""
-    # [TODO] 保存到exe打包目录
     log.debug('准备保存配置文件...')
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -95,40 +112,149 @@ def save_config():
     except Exception as e:
         log.error(f"保存配置文件时出错: {e}")
 
+def is_clipboard_open():
+    """检查当前线程是否已打开剪贴板
+    
+    Returns:
+        bool: 是否已打开剪贴板
+    """
+    thread_id = threading.get_ident()
+    return clipboard_open_by_thread.get(thread_id, False)
+
+def safe_open_clipboard(max_retries=MAX_CLIPBOARD_RETRY):
+    """安全地打开剪贴板，添加重试机制
+    
+    Args:
+        max_retries: 最大重试次数
+        
+    Returns:
+        bool: 是否成功打开剪贴板
+    """
+    thread_id = threading.get_ident()
+    
+    # 检查当前线程是否已经打开剪贴板
+    if is_clipboard_open():
+        return True  # 剪贴板已经被当前线程打开
+    
+    for i in range(max_retries):
+        try:
+            win32clipboard.OpenClipboard()
+            clipboard_open_by_thread[thread_id] = True
+            return True
+        except Exception as e:
+            if i == max_retries - 1:  # 如果是最后一次尝试
+                log.debug(f"打开剪贴板失败: {e}")
+                return False
+            time.sleep(CLIPBOARD_RETRY_DELAY)  # 等待一段时间再重试
+    return False
+
+def safe_close_clipboard():
+    """安全地关闭剪贴板，只在当前线程已打开剪贴板时进行关闭
+    
+    Returns:
+        bool: 是否成功关闭剪贴板
+    """
+    thread_id = threading.get_ident()
+    
+    # 如果当前线程没有打开剪贴板，跳过关闭操作
+    if not clipboard_open_by_thread.get(thread_id, False):
+        return True
+    
+    try:
+        win32clipboard.CloseClipboard()
+        clipboard_open_by_thread[thread_id] = False
+        return True
+    except Exception as e:
+        # 这里使用debug级别，因为这通常不是致命错误
+        log.debug(f"关闭剪贴板失败: {e}")
+        # 即使关闭失败，也标记为已关闭，避免后续再次尝试关闭
+        clipboard_open_by_thread[thread_id] = False
+        return False
+
+def clipboard_operation(operation_func):
+    """剪贴板操作装饰器，确保安全打开和关闭剪贴板
+    
+    Args:
+        operation_func: 要执行的剪贴板操作函数
+        
+    Returns:
+        包装后的函数
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            if not safe_open_clipboard():
+                raise ClipboardError("无法打开剪贴板")
+            
+            # 执行剪贴板操作
+            result = operation_func(*args, **kwargs)
+            
+            # 操作完成后关闭剪贴板
+            safe_close_clipboard()
+            
+            return result
+        except Exception as e:
+            # 确保出错时也关闭剪贴板
+            safe_close_clipboard()
+            raise e
+    
+    return wrapper
+
 def clear_clipboard(args=None):
     """清空剪贴板内容"""
     log.debug('准备清空剪贴板...')
     global is_clearing_clipboard, previous_content
     
-    try:
-        is_clearing_clipboard = True
-        win32clipboard.OpenClipboard()
-        win32clipboard.EmptyClipboard()
-        win32clipboard.CloseClipboard()
-        
-        # 更新之前的内容为空剪贴板状态
-        previous_content = get_clipboard_content()
-        return True
-    except Exception as e:
-        log.error('清空剪贴板时出错', str(e))
-        return False
-    finally:
-        is_clearing_clipboard = False
+    with clipboard_lock:  # 使用锁确保线程安全
+        try:
+            is_clearing_clipboard = True
+            
+            # 使用pyperclip尝试清空剪贴板，它有内置的错误处理
+            try:
+                pyperclip.copy('')
+                # 更新之前的内容为空剪贴板状态
+                previous_content = get_clipboard_content()
+                return True
+            except:
+                # 如果pyperclip方法失败，尝试使用win32clipboard
+                try:
+                    if not safe_open_clipboard():
+                        log.error("无法打开剪贴板进行清空操作")
+                        return False
+                    
+                    win32clipboard.EmptyClipboard()
+                    safe_close_clipboard()
+                    
+                    # 更新之前的内容为空剪贴板状态
+                    previous_content = get_clipboard_content()
+                    return True
+                except Exception as e:
+                    log.error(f'使用win32clipboard清空剪贴板出错: {e}')
+                    safe_close_clipboard()
+                    return False
+                
+        except Exception as e:
+            log.error(f'清空剪贴板时出错: {e}')
+            return False
+        finally:
+            is_clearing_clipboard = False
 
 def set_clipboard(text):
     """设置剪贴板内容"""
     log.debug('准备设置剪贴板内容...')
     global is_setting_clipboard
     
-    try:
-        is_setting_clipboard = True
-        pyperclip.copy(text)
-        return True
-    except Exception as e:
-        log.debug(f"设置剪贴板内容出错: {e}")
-        return False
-    finally:
-        is_setting_clipboard = False
+    with clipboard_lock:  # 使用锁确保线程安全
+        try:
+            is_setting_clipboard = True
+            
+            # 使用pyperclip的方式，它已经包含异常处理
+            pyperclip.copy(text)
+            return True
+        except Exception as e:
+            log.error(f"设置剪贴板内容出错: {e}")
+            return False
+        finally:
+            is_setting_clipboard = False
 
 # 添加更多剪贴板格式的常量定义
 CF_HTML = win32clipboard.RegisterClipboardFormat("HTML Format")
@@ -309,173 +435,280 @@ def open_netdisk_with_pwd_and_copy(netdisk_info):
         toast('打开网盘链接出错', str(e))
         print(f"打开网盘链接出错: {e}")
 
+def get_clipboard_format_name(format_id):
+    """安全获取剪贴板格式名称
+    
+    Args:
+        format_id: 格式ID
+        
+    Returns:
+        str: 格式名称，如果出错则返回"未知格式"
+    """
+    try:
+        return win32clipboard.GetClipboardFormatName(format_id)
+    except:
+        return f"未知格式({format_id})"
+
+def get_clipboard_text():
+    """获取剪贴板中的文本内容
+    
+    Returns:
+        str: 文本内容，如果不是文本则返回None
+    """
+    if not is_clipboard_open():
+        if not safe_open_clipboard():
+            return None
+    
+    try:
+        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+        elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT):
+            return win32clipboard.GetClipboardData(win32con.CF_TEXT).decode('utf-8')
+        else:
+            return None
+    except Exception as e:
+        log.debug(f"获取剪贴板文本出错: {e}")
+        return None
+    finally:
+        # 不关闭剪贴板，由调用者处理
+        pass
+
 def get_clipboard_content(truncate=True):
     """获取剪贴板内容及其类型
     
     Args:
         truncate: 是否截断长文本，默认为True
     """
-    try:
-        win32clipboard.OpenClipboard()
+    with clipboard_lock:  # 使用锁确保线程安全
+        # 重置此线程的剪贴板状态
+        thread_id = threading.get_ident()
+        clipboard_open_by_thread[thread_id] = False
         
-        # 检查是否有文本
-        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT) \
-        or win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-            data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-            
-            # 检查是否是网盘链接
-            netdisk_info = detect_netdisk_link(data)
-            if (netdisk_info):
-                win32clipboard.CloseClipboard()
-                pwd_info = f" [提取码: {netdisk_info['pwd']}]" if netdisk_info['pwd'] else ""
-                return {
-                    "type": "网盘链接", 
-                    "content": f"{netdisk_info['name']}: {netdisk_info['url']}{pwd_info}",
-                    "netdisk_info": netdisk_info,
-                    "raw_content": data  # 保存原始内容
-                }
-            
-            # 检查文本是否是URL
-            if is_url(data):
-                win32clipboard.CloseClipboard()
-                return {
-                    "type": "网址", 
-                    "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
-                    "raw_content": data  # 保存原始内容
-                }
-            
-            # 检查文本是否是邮箱
-            if is_email(data):
-                win32clipboard.CloseClipboard()
-                return {"type": "邮箱", "content": data, "raw_content": data}
-                
-            win32clipboard.CloseClipboard()
-            return {
-                "type": "文本", 
-                "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
-                "raw_content": data  # 保存原始内容
-            }
-        
-        # 检查是否有HTML内容
-        elif win32clipboard.IsClipboardFormatAvailable(CF_HTML):
+        for retry in range(MAX_CLIPBOARD_RETRY):
             try:
-                data = win32clipboard.GetClipboardData(CF_HTML)
-                win32clipboard.CloseClipboard()
-                # 提取HTML中的纯文本内容摘要
-                import re
-                text = re.sub('<[^<]+?>', '', data)
-                text = ' '.join(text.split())
-                summary = text[:config["truncate_length"]] + "..." if truncate and len(text) > config["truncate_length"] else text
-                return {
-                    "type": "HTML", 
-                    "content": summary, 
-                    "raw_content": data  # 保存原始HTML
-                }
-            except:
-                win32clipboard.CloseClipboard()
-                return {"type": "HTML", "content": "HTML内容 (无法显示详细信息)", "raw_content": ""}
-        
-        # 检查是否有RTF格式
-        elif win32clipboard.IsClipboardFormatAvailable(CF_RTF):
-            try:
-                data = win32clipboard.GetClipboardData(CF_RTF)
-                win32clipboard.CloseClipboard()
-                preview = "富文本内容"
-                if len(data) > 50:
-                    preview += f" (大小: {len(data)} 字节)"
-                return {"type": "富文本", "content": preview, "raw_content": data}
-            except:
-                win32clipboard.CloseClipboard()
-                return {"type": "富文本", "content": "富文本内容 (无法显示详细信息)", "raw_content": ""}
-        
-        # 检查是否有URL
-        elif win32clipboard.IsClipboardFormatAvailable(CF_URL):
-            try:
-                url = win32clipboard.GetClipboardData(CF_URL)
-                win32clipboard.CloseClipboard()
-                return {"type": "网址", "content": url, "raw_content": url}
-            except:
-                win32clipboard.CloseClipboard()
-                return {"type": "网址", "content": "网址内容 (无法显示)", "raw_content": ""}
-                
-        # 检查是否有图片
-        elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB) or win32clipboard.IsClipboardFormatAvailable(win32con.CF_BITMAP):
-            # 尝试获取图片尺寸信息
-            try:
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
-                    dib_data = win32clipboard.GetClipboardData(win32con.CF_DIB)
-                    # BITMAPINFO结构的前8个字节之后是宽高信息
-                    if len(dib_data) > 16:
-                        import struct
-                        width, height = struct.unpack('ii', dib_data[8:16])
-                        win32clipboard.CloseClipboard()
-                        return {"type": "图片", "content": f"已复制一张图片 (尺寸: {width}x{height})", "raw_content": dib_data}
-            except:
-                pass
-                
-            win32clipboard.CloseClipboard()
-            return {"type": "图片", "content": "已复制一张图片", "raw_content": ""}
-            
-        # 检查是否有文件列表
-        elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
-            file_list = win32clipboard.GetClipboardData(win32con.CF_HDROP)
-            win32clipboard.CloseClipboard()
-            
-            file_count = len(file_list)
-            if file_count == 1:
-                file_path = file_list[0]
-                file_name = os.path.basename(file_path)
-                file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-                
-                # 格式化文件大小
-                if file_size < 1024:
-                    size_str = f"{file_size} 字节"
-                elif file_size < 1024 * 1024:
-                    size_str = f"{file_size/1024:.1f} KB"
-                else:
-                    size_str = f"{file_size/(1024*1024):.1f} MB"
-                    
-                return {"type": "文件", "content": f"已复制文件: {file_name} ({size_str})", "raw_content": file_path}
-            else:
-                return {"type": "文件", "content": f"已复制 {file_count} 个文件", "raw_content": file_list}
-        
-        # 检查是否是Office绘图对象
-        elif win32clipboard.IsClipboardFormatAvailable(CF_OFFICE_DRAWING):
-            win32clipboard.CloseClipboard()
-            return {"type": "Office对象", "content": "已复制Office绘图或对象", "raw_content": ""}
-            
-        # 其他格式
-        else:
-            formats = []
-            format_id = 0
-            
-            while True:
-                try:
-                    format_id = win32clipboard.EnumClipboardFormats(format_id)
-                    if format_id == 0:
-                        break
-                        
-                    # 尝试获取格式名称
+                # 尝试打开剪贴板
+                if not safe_open_clipboard():
+                    if retry < MAX_CLIPBOARD_RETRY - 1:
+                        time.sleep(CLIPBOARD_RETRY_DELAY)
+                        continue
+                    else:
+                        return {"type": "错误", "content": "无法访问剪贴板，可能被其他程序占用", "raw_content": ""}
+
+                # 检查是否有文本
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT) \
+                or win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
                     try:
-                        format_name = win32clipboard.GetClipboardFormatName(format_id)
-                        formats.append(f"{format_name} ({format_id})")
-                    except:
-                        formats.append(f"未知格式 ({format_id})")
+                        data = get_clipboard_text()
+                        if data is None:
+                            raise Exception("无法获取文本数据")
+                            
+                        safe_close_clipboard()
+                        
+                        # 检查是否是网盘链接
+                        netdisk_info = detect_netdisk_link(data)
+                        if (netdisk_info):
+                            pwd_info = f" [提取码: {netdisk_info['pwd']}]" if netdisk_info['pwd'] else ""
+                            return {
+                                "type": "网盘链接", 
+                                "content": f"{netdisk_info['name']}: {netdisk_info['url']}{pwd_info}",
+                                "netdisk_info": netdisk_info,
+                                "raw_content": data  # 保存原始内容
+                            }
+                        
+                        # 检查文本是否是URL
+                        if is_url(data):
+                            return {
+                                "type": "网址", 
+                                "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
+                                "raw_content": data  # 保存原始内容
+                            }
+                        
+                        # 检查文本是否是邮箱
+                        if is_email(data):
+                            return {"type": "邮箱", "content": data, "raw_content": data}
+                            
+                        return {
+                            "type": "文本", 
+                            "content": data if (not truncate or len(data) <= config["truncate_length"]) else data[:config["truncate_length"]] + "...",
+                            "raw_content": data  # 保存原始内容
+                        }
+                    except Exception as e:
+                        safe_close_clipboard()
+                        if retry < MAX_CLIPBOARD_RETRY - 1:
+                            time.sleep(CLIPBOARD_RETRY_DELAY)
+                            continue
+                        log.error(f"获取文本内容出错: {e}")
+                        return {"type": "错误", "content": f"获取文本内容出错: {e}", "raw_content": str(e)}
+                
+                # 检查是否有HTML内容
+                elif win32clipboard.IsClipboardFormatAvailable(CF_HTML):
+                    try:
+                        data = win32clipboard.GetClipboardData(CF_HTML)
+                        safe_close_clipboard()
+                        # 提取HTML中的纯文本内容摘要
+                        import re
+                        text = re.sub('<[^<]+?>', '', data)
+                        text = ' '.join(text.split())
+                        summary = text[:config["truncate_length"]] + "..." if truncate and len(text) > config["truncate_length"] else text
+                        return {
+                            "type": "HTML", 
+                            "content": summary, 
+                            "raw_content": data  # 保存原始HTML
+                        }
+                    except Exception as e:
+                        safe_close_clipboard()
+                        if retry < MAX_CLIPBOARD_RETRY - 1:
+                            time.sleep(CLIPBOARD_RETRY_DELAY)
+                            continue
+                        return {"type": "HTML", "content": f"HTML内容 (无法显示: {e})", "raw_content": ""}
+                
+                # 检查是否有RTF格式
+                elif win32clipboard.IsClipboardFormatAvailable(CF_RTF):
+                    try:
+                        data = win32clipboard.GetClipboardData(CF_RTF)
+                        safe_close_clipboard()
+                        preview = "富文本内容"
+                        if len(data) > 50:
+                            preview += f" (大小: {len(data)} 字节)"
+                        return {"type": "富文本", "content": preview, "raw_content": data}
+                    except Exception as e:
+                        safe_close_clipboard()
+                        if retry < MAX_CLIPBOARD_RETRY - 1:
+                            time.sleep(CLIPBOARD_RETRY_DELAY)
+                            continue
+                        return {"type": "富文本", "content": f"富文本内容 (无法显示: {e})", "raw_content": ""}
+                
+                # 检查是否有URL
+                elif win32clipboard.IsClipboardFormatAvailable(CF_URL):
+                    try:
+                        url = win32clipboard.GetClipboardData(CF_URL)
+                        safe_close_clipboard()
+                        return {"type": "网址", "content": url, "raw_content": url}
+                    except Exception as e:
+                        safe_close_clipboard()
+                        if retry < MAX_CLIPBOARD_RETRY - 1:
+                            time.sleep(CLIPBOARD_RETRY_DELAY)
+                            continue
+                        return {"type": "网址", "content": f"网址内容 (无法显示: {e})", "raw_content": ""}
+                        
+                # 检查是否有图片
+                elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB) or win32clipboard.IsClipboardFormatAvailable(win32con.CF_BITMAP):
+                    # 尝试以非直接方式获取图片信息，避免剪贴板访问问题
+                    try:
+                        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
+                            try:
+                                clipboard_formats = []
+                                format_id = 0
+                                while True:
+                                    format_id = win32clipboard.EnumClipboardFormats(format_id)
+                                    if format_id == 0:
+                                        break
+                                    try:
+                                        name = get_clipboard_format_name(format_id)
+                                        clipboard_formats.append(f"{name}")
+                                    except:
+                                        pass
+                                
+                                safe_close_clipboard()
+                                # 使用通用描述而不是尝试获取DIB数据
+                                return {"type": "图片", "content": f"已复制一张图片", "raw_content": "image"}
+                            except Exception as e:
+                                log.debug(f"获取DIB格式图片信息失败: {e}")
+                                safe_close_clipboard()
+                                return {"type": "图片", "content": "已复制一张图片", "raw_content": ""}
+                        else:
+                            safe_close_clipboard()
+                            return {"type": "图片", "content": "已复制一张图片", "raw_content": ""}
+                    except Exception as e:
+                        safe_close_clipboard()
+                        log.debug(f"处理图片剪贴板内容时出错: {e}")
+                        return {"type": "图片", "content": "已复制一张图片", "raw_content": ""}
+                    
+                # 检查是否有文件列表
+                elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
+                    try:
+                        file_list = win32clipboard.GetClipboardData(win32con.CF_HDROP)
+                        safe_close_clipboard()
+                        
+                        file_count = len(file_list)
+                        if file_count == 1:
+                            file_path = file_list[0]
+                            file_name = os.path.basename(file_path)
+                            try:
+                                file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                            except:
+                                file_size = 0
+                            
+                            # 格式化文件大小
+                            if file_size < 1024:
+                                size_str = f"{file_size} 字节"
+                            elif file_size < 1024 * 1024:
+                                size_str = f"{file_size/1024:.1f} KB"
+                            else:
+                                size_str = f"{file_size/(1024*1024):.1f} MB"
+                                
+                            return {"type": "文件", "content": f"已复制文件: {file_name} ({size_str})", "raw_content": file_path}
+                        else:
+                            return {"type": "文件", "content": f"已复制 {file_count} 个文件", "raw_content": file_list}
+                    except Exception as e:
+                        safe_close_clipboard()
+                        if retry < MAX_CLIPBOARD_RETRY - 1:
+                            time.sleep(CLIPBOARD_RETRY_DELAY)
+                            continue
+                        return {"type": "文件", "content": f"文件内容 (无法显示: {e})", "raw_content": ""}
+                
+                # 检查是否是Office绘图对象
+                elif win32clipboard.IsClipboardFormatAvailable(CF_OFFICE_DRAWING):
+                    safe_close_clipboard()
+                    return {"type": "Office对象", "content": "已复制Office绘图或对象", "raw_content": ""}
+                    
+                # 其他格式
+                else:
+                    try:
+                        clipboard_formats = []
+                        format_id = 0
+                        
+                        while True:
+                            try:
+                                format_id = win32clipboard.EnumClipboardFormats(format_id)
+                                if format_id == 0:
+                                    break
+                                    
+                                # 尝试获取格式名称
+                                name = get_clipboard_format_name(format_id)
+                                clipboard_formats.append(f"{name} ({format_id})")
+                            except:
+                                break
+                        
+                        safe_close_clipboard()
+                        
+                        if clipboard_formats:
+                            return {"type": "特殊格式", "content": f"已复制内容 (格式: {', '.join(clipboard_formats[:3])}...)", "raw_content": clipboard_formats}
+                        else:
+                            return {"type": "未知格式", "content": "已复制内容 (未知格式)", "raw_content": ""}
+                    except Exception as e:
+                        safe_close_clipboard()
+                        if retry < MAX_CLIPBOARD_RETRY - 1:
+                            time.sleep(CLIPBOARD_RETRY_DELAY)
+                            continue
+                        return {"type": "未知格式", "content": f"未知格式 (出错: {e})", "raw_content": ""}
+
+            except Exception as e:
+                # 确保剪贴板被关闭
+                try:
+                    safe_close_clipboard()
                 except:
-                    break
-            
-            win32clipboard.CloseClipboard()
-            
-            if formats:
-                return {"type": "特殊格式", "content": f"已复制内容 (格式: {', '.join(formats[:3])}...)", "raw_content": formats}
-            else:
-                return {"type": "未知格式", "content": "已复制内容 (未知格式)", "raw_content": ""}
-    except Exception as e:
-        try:
-            win32clipboard.CloseClipboard()
-        except:
-            pass
-        return {"type": "错误", "content": str(e), "raw_content": str(e)}
+                    pass
+                
+                if retry < MAX_CLIPBOARD_RETRY - 1:
+                    time.sleep(CLIPBOARD_RETRY_DELAY)
+                    continue
+                else:
+                    log.error(f"获取剪贴板内容异常: {e}")
+                    return {"type": "错误", "content": f"获取剪贴板内容异常: {e}", "raw_content": str(e)}
+                    
+        # 所有重试都失败
+        return {"type": "错误", "content": "多次尝试获取剪贴板内容失败", "raw_content": ""}
 
 # 创建系统托盘图标
 def create_image():
